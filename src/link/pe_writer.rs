@@ -51,6 +51,16 @@ const FILE_ALIGN: u32 = 0x200;
 // Four section headers push the header block past 0x200; round to 0x400.
 const HEADERS_SIZE: u32 = 0x400;
 const PE_OFF: usize = 0x80; // e_lfanew
+/// BC4.5 tlink32's OS (1.0) and subsystem (3.10) versions, which the object
+/// linker stamps on PE32 and PE32+ images alike. USER keys legacy metrics on
+/// the subsystem version: below 6.0 a window gets the thin pre-Vista frame
+/// (no padded border) and a dialog keeps Win3.x-era font base units. BC4.5
+/// programs
+/// lay out fixed-pixel windows and paint fixed-pixel bitmaps against those
+/// metrics; 6.0 shrinks every WS_DLGFRAME client by 10px and narrows every
+/// dialog (RailC boards overflow their frames and About bitmaps misplace).
+const OS_VERSION: (u16, u16) = (1, 0);
+const SUBSYSTEM_VERSION: (u16, u16) = (3, 10);
 
 fn align_up(v: u32, a: u32) -> u32 {
     v.div_ceil(a) * a
@@ -3750,12 +3760,12 @@ pub fn write_pe_from_objects(
     }
     b.u32(SECT_ALIGN);
     b.u32(FILE_ALIGN);
-    b.u16(if is_pe32 { 1 } else { 6 }); // MajorOSVersion
+    b.u16(OS_VERSION.0); // MajorOSVersion
+    b.u16(OS_VERSION.1);
     b.u16(0);
     b.u16(0);
-    b.u16(0);
-    b.u16(if is_pe32 { 3 } else { 6 }); // MajorSubsystemVersion
-    b.u16(if is_pe32 { 10 } else { 0 }); // MinorSubsystemVersion
+    b.u16(SUBSYSTEM_VERSION.0); // MajorSubsystemVersion
+    b.u16(SUBSYSTEM_VERSION.1); // MinorSubsystemVersion
     b.u32(0);
     b.u32(size_of_image);
     b.u32(HEADERS_SIZE);

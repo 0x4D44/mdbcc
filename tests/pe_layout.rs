@@ -254,3 +254,44 @@ fn large_text_section_loads_and_runs() {
         "large-.text program produced wrong exit code"
     );
 }
+
+/// Read `(MajorOSVersion, MinorOSVersion, MajorSubsystemVersion,
+/// MinorSubsystemVersion)` from a PE32+ optional header.
+fn version_fields(pe: &[u8]) -> (u16, u16, u16, u16) {
+    let opt = PE_OFF + 4 + 20;
+    let u16_at = |off: usize| u16::from_le_bytes([pe[opt + off], pe[opt + off + 1]]);
+    (u16_at(0x28), u16_at(0x2A), u16_at(0x30), u16_at(0x32))
+}
+
+#[test]
+fn win64_images_carry_bc45_subsystem_version() {
+    // Windows gives a subsystem >= 6.0 image the padded Vista frame and
+    // modern dialog base units. BC4.5 programs lay out fixed-pixel windows
+    // against tlink32's OS 1.0 / subsystem 3.10 metrics: at 6.0 RailC's
+    // 300x192 Departures board lost 10px of client height and overflowed
+    // its frame, and the About bitmaps no longer fit the dialog. Win64 images
+    // must stamp the Borland versions, like the PE32 path does, whether they
+    // come from compile_to_pe or from an mdlink-style object link.
+    let src = "int main(void){ return 0; }";
+    let direct = compile_to_pe(src.as_bytes()).expect("compile_to_pe");
+    assert_eq!(
+        version_fields(&direct),
+        (1, 0, 3, 10),
+        "compile_to_pe PE32+"
+    );
+
+    let resolver = mdbcc::pp::DefaultResolver {
+        base_dir: PathBuf::from("."),
+    };
+    let obj = mdbcc::compile::compile_to_object_with(src.as_bytes(), "v.cpp", &resolver)
+        .expect("compile_to_object");
+    let linked = mdbcc::link::link(
+        &[mdbcc::link::Input::Object(&obj)],
+        &mdbcc::link::LinkOpts {
+            subsystem: mdbcc::link::Subsystem::Console,
+            ..mdbcc::link::LinkOpts::default()
+        },
+    )
+    .expect("link");
+    assert_eq!(version_fields(&linked), (1, 0, 3, 10), "mdlink PE32+");
+}
