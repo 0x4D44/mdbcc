@@ -1,6 +1,6 @@
 [package]
 name = "mdbcc"
-version = "0.7.12"
+version = "0.7.13"
 edition = "2024"
 description = "A from-scratch reimplementation of the Borland C++ compiler toolchain"
 license = "MIT OR Apache-2.0"
