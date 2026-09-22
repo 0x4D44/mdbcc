@@ -1,0 +1,55 @@
+[package]
+name = "mdbcc"
+version = "0.7.12"
+edition = "2024"
+description = "A from-scratch reimplementation of the Borland C++ compiler toolchain"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/0x4D44/mdbcc"
+
+[lib]
+name = "mdbcc"
+path = "src/lib.rs"
+
+# Driver named after Borland's BCC.EXE front-end.
+[[bin]]
+name = "bcc"
+path = "src/main.rs"
+
+# Project manifest runner. Builds mdbcc.toml projects from a directory root.
+[[bin]]
+name = "mdbcc"
+path = "src/bin/mdbcc.rs"
+
+# Linker, the mdbcc analogue of Borland's TLINK32.EXE — consumes COFF
+# `.obj` files (and, in later S1c phases, OMF .obj / .lib / .def / .res)
+# and emits a PE32+ executable. Backed by the `mdbcc::link` library
+# module (see HLD 2026-05-27 §1.1).
+[[bin]]
+name = "mdlink"
+path = "src/bin/mdlink.rs"
+
+# Static-library (.lib) builder, the mdbcc analogue of Borland's TLIB.EXE —
+# bundles COFF .obj files into an MS-format archive (symbol-driven). Builds the
+# railc self-host deliverables mdcw32/mdbids/mdowl from compiled RTL/BIDS/OWL.
+[[bin]]
+name = "mdar"
+path = "src/bin/mdar.rs"
+
+# Resource compiler, the mdbcc analogue of Borland's BRC/BRC32.EXE.
+[[bin]]
+name = "mdrc"
+path = "src/bin/mdrc.rs"
+
+# Dependency-library producer. Uses the freshly-built bcc/mdar to compile the
+# BC4.52 OWL/streams/RTL/BIDS source into target/bc45-libs/{mdowl,mdstreams,
+# mdcw32,mdbids}.lib — the toolchain's runtime libraries that OWL apps link.
+# Skips loudly (exit 0) when the BC4.52 source tree is absent.
+[[bin]]
+name = "build_bc45_libs"
+path = "src/bin/build_bc45_libs.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true

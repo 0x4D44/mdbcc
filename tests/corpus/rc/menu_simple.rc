@@ -1,0 +1,7 @@
+100 MENU
+BEGIN
+  POPUP "File"
+  BEGIN
+    MENUITEM "Exit", 200
+  END
+END

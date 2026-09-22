@@ -1,0 +1,155 @@
+--- SOURCE/OWL/DIALOG.CPP
++++ DIALOG.CPP
+@@ -25,8 +25,27 @@
+ //
+ // Our exported dialog proc & its proc instance
+ //
+-bool CALLBACK __export StdDlgProc(HWND, uint, WPARAM, LPARAM);
++LONG_PTR CALLBACK __export StdDlgProc(HWND, uint, WPARAM, LPARAM);
+ TProcInstance StdDlgProcInstance((FARPROC)StdDlgProc);
++extern "C" int mdbcc_owl_win64_marker_dialog = 1;
++#ifndef GWLP_USERDATA
++#define GWLP_USERDATA (-21)
++#endif
++extern "C" LONG_PTR __stdcall SetWindowLongPtrA(HWND, int, LONG_PTR);
++extern "C" LONG_PTR __stdcall GetWindowLongPtrA(HWND, int);
++#ifdef MDBCC_M2_TRACE
++static char* mdl_dec(long v, char* b){ char t[32]; int i=0; unsigned long u; int neg=0;
++  if(v<0){neg=1;u=(unsigned long)(0-v);}else u=(unsigned long)v;
++  if(!u)t[i++]=(char)48; while(u){t[i++]=(char)(48+(u%10));u/=10;} if(neg)*b++=(char)45; while(i)*b++=t[--i]; return b; }
++extern "C" void mdl_log(const char* tag, long a, long b){
++  HANDLE h=CreateFileA("C:/language/mdbcc/wrk_probe/owl_win64_smoke/dlglog.txt",0x40000000u,3u,0,4u,0x80u,0);
++  if(h==(HANDLE)(-1)||h==0)return; char buf[160];char* q=buf; const char* t=tag; while(*t)*q++=*t++;*q++=(char)32;
++  q=mdl_dec(a,q);*q++=(char)32;q=mdl_dec(b,q);*q++=(char)13;*q++=(char)10; DWORD wr=0;
++  SetFilePointer(h,0,0,2); WriteFile(h,buf,(DWORD)(q-buf),&wr,0); CloseHandle(h); }
++#define MDL(t,a,b) mdl_log(t,(long)(a),(long)(b))
++#else
++#define MDL(t,a,b) ((void)0)
++#endif
+ 
+ TDialog* _OWLDATA DlgCreationWindow = 0;  // public so derived classes can create
+ 
+@@ -189,6 +208,22 @@
+ 
+   switch (msg) {
+ 
++    case WM_PAINT:
++      { TEventInfo _ev(WM_PAINT);
++        if (Find(_ev)) {
++          TEventInfo _base(WM_PAINT);
++          TDialog::Find(_base);  // implicit-this qualified -> non-virtual; base TDialog::EvPaint entry
++          MDL("wmpaint.disc", (long)((__int64)_ev.Entry), (long)((__int64)_base.Entry));
++          if (_ev.Entry != _base.Entry) { Dispatch(_ev, wParam, lParam); return true; }
++        }
++      }
++      break;
++
++    case WM_COMMAND:
++      if (LOWORD(wParam) == IDOK)     { MDL("dlgfn.idok", 0, 0); CmOk();     return true; }
++      if (LOWORD(wParam) == IDCANCEL) { MDL("dlgfn.idcancel", 0, 0); CmCancel(); return true; }
++      break;
++
+     // 'Dispatch' WM_INITDIALOG by making a virtual call--no response table
+     // used. This is not generally overriden, and only arrives once.
+     //
+@@ -234,27 +269,31 @@
+ // function. Calls the virtual DialogFunction() to handle specific messages,
+ // mostly for startup sequence.
+ //
+-bool CALLBACK __export
++LONG_PTR CALLBACK __export
+ StdDlgProc(HWND hDlg, uint msg, WPARAM wParam, LPARAM lParam)
+ {
+   // Thunk on first message to a non-thunked window & thats not one sent to
+   // parent dialogs.
+   //
++  MDL("stddlg.msg", msg, (long)((__int64)hDlg));
+   if (msg == GetWindowPtrMsgId) // if it gets here, we wont know how to get it
+     return false;
+ 
+   // Get the window ptr using the global version since there is no other
+   // context.
+   // 
+-  TWindow*  w = ::GetWindowPtr(hDlg);
+-  TDialog*  dialog = TYPESAFE_DOWNCAST(w, TDialog);
++  // MDBCC Win64 M2 (DWL_USER path): recover the TDialog* from GWLP_USERDATA; USER32's
++  // DialogWndProc stays the window proc (no OWL subclass) so the dialog manager handles
++  // create/show/init/destroy normally.
++  TDialog*  dialog = (TDialog*)(LONG_PTR)::GetWindowLongPtrA(hDlg, GWLP_USERDATA);
++  TWindow*  w = dialog;
+ 
+   if (DlgCreationWindow && !dialog && msg != WM_CANCELMODE && msg != WM_ENABLE) {
+     DlgCreationWindow->HWindow = hDlg;
+-
+-    DlgCreationWindow->SubclassWindowFunction();
+     dialog = DlgCreationWindow;
++    ::SetWindowLongPtrA(hDlg, GWLP_USERDATA, (LONG_PTR)dialog);  // DWL_USER: store this; NO subclass
+     DlgCreationWindow = 0;
++    MDL("dlg.bound", (long)((__int64)dialog), (long)msg);
+   }
+   if (!dialog)
+     return false;
+@@ -265,8 +304,11 @@
+ #if defined(BI_PLAT_WIN32)
+   static bool exceptionOK =
+                 !(::GetVersion()&0x80000000) || (::GetVersion()&0xFF) >= 4;
+-  if (exceptionOK)
+-    return dialog->DialogFunction(msg, wParam, lParam);
++  if (exceptionOK) {
++    LONG_PTR _h = (LONG_PTR)(dialog->DialogFunction(msg, wParam, lParam) ? 1 : 0);
++    MDL("dlg.ret", (long)_h, (long)msg);
++    return _h;
++  }
+ #endif
+   TRY {
+     return dialog->DialogFunction(msg, wParam, lParam);
+@@ -384,8 +426,11 @@
+ int
+ TDialog::DoExecute()
+ {
+-  return DialogBoxParam(*GetModule(), Attr.Name, Parent ? Parent->HWindow : 0,
++  MDL("doexec.enter", 0, 0);
++  int _rv = DialogBoxParam(*GetModule(), Attr.Name, Parent ? Parent->HWindow : 0,
+                         (DLGPROC)(FARPROC)StdDlgProcInstance, Attr.Param);
++  MDL("doexec.return", (long)_rv, 0);
++  return _rv;
+ }
+ 
+ bool
+@@ -437,6 +482,7 @@
+ bool
+ TDialog::EvInitDialog(HWND /*hWndFocus*/)
+ {
++  MDL("evinit", 0, 0);
+   GetHWndState();
+   PerformDlgInit();
+   SetupWindow();
+@@ -471,6 +517,20 @@
+ 
+   SetCaption(Title);
+   TWindow::SetupWindow();
++
++  // MDBCC Win64 paint-order fix: dialog controls created from the template lack
++  // WS_CLIPSIBLINGS. Without it the OS leaves overlapping siblings' paint order
++  // undefined; 32-bit happened to paint text-over-panel, but Win64 paints a
++  // filled SS_BLACKRECT panel OVER the centered text it is meant to sit behind
++  // (RailC's "Start a new game" dialog — lines 2 & 3 vanished). Add
++  // WS_CLIPSIBLINGS to every child so overlapping controls render strictly by
++  // Z order (higher-Z text wins over the lower-Z panel). Harmless for the
++  // common non-overlapping case.
++  for (HWND _c = ::GetWindow(HWindow, GW_CHILD); _c; _c = ::GetWindow(_c, GW_HWNDNEXT)) {
++    LONG_PTR _s = ::GetWindowLongPtrA(_c, GWL_STYLE);
++    if (!(_s & WS_CLIPSIBLINGS))
++      ::SetWindowLongPtrA(_c, GWL_STYLE, _s | WS_CLIPSIBLINGS);
++  }
+ }
+ 
+ //
+@@ -528,6 +588,7 @@
+ void
+ TDialog::CmOk()
+ {
++  MDL("cmok", 0, 0);
+   CloseWindow(IDOK);
+ 
+   if (!IsModal  && !HWindow && IsFlagSet(wfDeleteOnClose))

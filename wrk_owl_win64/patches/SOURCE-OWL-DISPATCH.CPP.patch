@@ -1,0 +1,382 @@
+--- SOURCE/OWL/DISPATCH.CPP
++++ DISPATCH.CPP
+@@ -7,43 +7,47 @@
+ #include <owl/owlpch.h>
+ #include <owl/point.h>
+ #include <owl/dispatch.h>
++#ifndef MDBCC_WIN64_OVERLAY_DISPATCH
++#error "Win64 overlay owl/dispatch.h not on include path"
++#endif
++extern "C" int mdbcc_owl_win64_marker_dispatch = 1;
+ 
+ //----------------------------------------------------------------------------
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ i_LPARAM_Dispatch(GENERIC& generic,
+-                  int     (GENERIC::*pmf)(int32),
++                  int     (GENERIC::*pmf)(LPARAM),
+                   uint,
+-                  int32    lParam)
++                  LPARAM    lParam)
+ {
+   return (generic.*pmf)(lParam);
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ i_WPARAM_Dispatch(GENERIC& generic,
+                   int     (GENERIC::*pmf)(uint),
+                   uint     wParam,
+-                  int32)
++                  LPARAM)
+ {
+   return (generic.*pmf)(wParam);
+ }
+ 
+ //----------------------------------------------------------------------------
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ I32_Dispatch(GENERIC& generic,
+              uint32  (GENERIC::*pmf)(),
+              uint,
+-             int32)
++             LPARAM)
+ {
+   return (generic.*pmf)();
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ I32_LPARAM_Dispatch(GENERIC& generic,
+-                    int32  (GENERIC::*pmf)(int32),
++                    int32  (GENERIC::*pmf)(LPARAM),
+                     uint,
+-                    int32    lParam)
++                    LPARAM    lParam)
+ {
+   return (generic.*pmf)(lParam);
+ }
+@@ -51,50 +55,50 @@
+ //
+ // passes lParam as a uint and returns an int32 result
+ //
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ I32_U_Dispatch(GENERIC& generic,
+                int32   (GENERIC::*pmf)(uint),
+                uint,
+-               int32    lParam)
++               LPARAM    lParam)
+ {
+   return (generic.*pmf)((uint)lParam);
+ }
+ 
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ I32_WPARAM_LPARAM_Dispatch(GENERIC& generic,
+-                           int32   (GENERIC::*pmf)(uint, int32),
++                           int32   (GENERIC::*pmf)(uint, LPARAM),
+                            uint     wParam,
+-                           int32    lParam)
++                           LPARAM    lParam)
+ {
+   return (generic.*pmf)(wParam, lParam);
+ }
+ 
+ //----------------------------------------------------------------------------
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ U_Dispatch(GENERIC& generic,
+            uint(GENERIC::*pmf)(),
+            uint,
+-           int32)
++           LPARAM)
+ {
+   return (generic.*pmf)();
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ U_LPARAM_Dispatch(GENERIC& generic,
+-                  uint    (GENERIC::*pmf)(int32),
++                  uint    (GENERIC::*pmf)(LPARAM),
+                   uint,
+-                  int32    lParam)
++                  LPARAM    lParam)
+ {
+   return (generic.*pmf)(lParam);
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ U_POINT_Dispatch(GENERIC& generic,
+                  uint    (GENERIC::*pmf)(TPoint&),
+                  uint,
+-                 int32    lParam)
++                 LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   return (generic.*pmf)(TPoint(lParam));
+@@ -103,69 +107,69 @@
+ #endif
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ U_POINTER_Dispatch(GENERIC& generic,
+                    uint    (GENERIC::*pmf)(void*),
+                    uint,
+-                   int32    lParam)
++                   LPARAM    lParam)
+ {
+   return (generic.*pmf)((void*)lParam);
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ U_U_Dispatch(GENERIC& generic,
+              uint    (GENERIC::*pmf)(uint),
+              uint,
+-             int32    lParam)
++             LPARAM    lParam)
+ {
+   return (generic.*pmf)((uint)lParam);
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ U_U_U_U_Dispatch(GENERIC& generic,
+                  uint    (GENERIC::*pmf)(uint, uint, uint),
+                  uint     wParam,
+-                 int32    lParam)
++                 LPARAM    lParam)
+ {
+   return (generic.*pmf)(wParam, LOWORD(lParam), HIWORD(lParam));
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ U_WPARAM_LPARAM_Dispatch(GENERIC& generic,
+-                         uint    (GENERIC::*pmf)(uint, int32),
++                         uint    (GENERIC::*pmf)(uint, LPARAM),
+                          uint     wParam,
+-                         int32    lParam)
++                         LPARAM    lParam)
+ {
+   return (generic.*pmf)(wParam, lParam);
+ }
+ 
+ //----------------------------------------------------------------------------
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_Dispatch(GENERIC& generic,
+            void    (GENERIC::*pmf)(),
+            uint,
+-           int32)
++           LPARAM)
+ {
+   (generic.*pmf)();
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_LPARAM_Dispatch(GENERIC& generic,
+-                  void    (GENERIC::*pmf)(int32),
++                  void    (GENERIC::*pmf)(LPARAM),
+                   uint,
+-                  int32    lParam)
++                  LPARAM    lParam)
+ {
+   (generic.*pmf)(lParam);
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_POINT_Dispatch(GENERIC& generic,
+                  void    (GENERIC::*pmf)(TPoint&),
+                  uint,
+-                 int32    lParam)
++                 LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   (generic.*pmf)(TPoint(lParam));
+@@ -175,31 +179,31 @@
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_POINTER_Dispatch(GENERIC& generic,
+                    void    (GENERIC::*pmf)(void*),
+                    uint,
+-                   int32    lParam)
++                   LPARAM    lParam)
+ {
+   (generic.*pmf)((void*)lParam);
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_U_Dispatch(GENERIC& generic,
+              void    (GENERIC::*pmf)(uint),
+              uint,
+-             int32    lParam)
++             LPARAM    lParam)
+ {
+   (generic.*pmf)((uint)lParam);
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_U_POINT_Dispatch(GENERIC& generic,
+                    void    (GENERIC::*pmf)(uint, TPoint&),
+                    uint     wParam,
+-                   int32    lParam)
++                   LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   (generic.*pmf)(wParam, TPoint(lParam));
+@@ -209,41 +213,41 @@
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_U_U_Dispatch(GENERIC& generic,
+                void    (GENERIC::*pmf)(uint, uint),
+                uint     wParam,
+-               int32    lParam)
++               LPARAM    lParam)
+ {
+   (generic.*pmf)(wParam, (uint)lParam);
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_U_U_U_Dispatch(GENERIC& generic,
+                  void    (GENERIC::*pmf)(uint, uint, uint),
+                  uint     wParam,
+-                 int32    lParam)
++                 LPARAM    lParam)
+ {
+   (generic.*pmf)(wParam, LOWORD(lParam), HIWORD(lParam));
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_WPARAM_Dispatch(GENERIC& generic,
+                   void    (GENERIC::*pmf)(uint),
+                   uint     wParam,
+-                  int32)
++                  LPARAM)
+ {
+   (generic.*pmf)(wParam);
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_WPARAM_LPARAM_Dispatch(GENERIC& generic,
+-                         void    (GENERIC::*pmf)(uint, int32),
++                         void    (GENERIC::*pmf)(uint, LPARAM),
+                          uint     wParam,
+-                         int32    lParam)
++                         LPARAM    lParam)
+ {
+   (generic.*pmf)(wParam, lParam);
+   return 0;
+@@ -253,11 +257,11 @@
+ //
+ // Semi-custom message crackers
+ //
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ i_U_W_U_Dispatch(GENERIC& generic,
+                  int     (GENERIC::*pmf)(uint, uint, uint),
+                  uint     wParam,
+-                 int32    lParam)
++                 LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   return (generic.*pmf)(LOWORD(wParam), lParam, HIWORD(wParam));
+@@ -266,11 +270,11 @@
+ #endif
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_U_U_W_Dispatch(GENERIC& generic,
+                  void    (GENERIC::*pmf)(uint, uint, uint),
+                  uint     wParam,
+-                 int32    lParam)
++                 LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   (generic.*pmf)(LOWORD(wParam), HIWORD(wParam), lParam);
+@@ -285,11 +289,11 @@
+ // Custom message crackers
+ //
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_Activate_Dispatch(GENERIC& generic,
+                     void    (GENERIC::*pmf)(uint, uint, uint),
+                     uint     wParam,
+-                    int32    lParam)
++                    LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   (generic.*pmf)(LOWORD(wParam), HIWORD(wParam), lParam);
+@@ -299,11 +303,11 @@
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_MdiActivate_Dispatch(GENERIC& generic,
+                        void    (GENERIC::*pmf)(uint, uint),
+                        uint     wParam,
+-                       int32    lParam)
++                       LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   (generic.*pmf)(lParam, wParam);
+@@ -313,11 +317,11 @@
+   return 0;
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ I32_MenuChar_Dispatch(GENERIC& generic,
+                       int32   (GENERIC::*pmf)(uint, uint, uint),
+                       uint     wParam,
+-                      int32    lParam)
++                      LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   return (generic.*pmf)(LOWORD(wParam), HIWORD(wParam), lParam);
+@@ -326,11 +330,11 @@
+ #endif
+ }
+ 
+-int32 _OWLFUNC
++LRESULT _OWLFUNC
+ v_ParentNotify_Dispatch(GENERIC& generic,
+                         void    (GENERIC::*pmf)(uint, uint, uint),
+                         uint     wParam,
+-                        int32    lParam)
++                        LPARAM    lParam)
+ {
+ #if defined(BI_PLAT_WIN32)
+   if (LOWORD(wParam) >= WM_MOUSEFIRST && LOWORD(wParam) <= WM_MOUSELAST)

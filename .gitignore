@@ -1,0 +1,26 @@
+target/
+target_ci/
+/bin/
+/obj/
+venv/
+.venv/
+env/
+*.tmp
+*.log
+# Build artefacts from ad-hoc compiler probes run at the repo root
+*.obj
+*.exe
+
+# Acquired third-party tools / copyrighted sample corpora — never commit
+wrk_tools/
+wrk_corpus/
+wrk_oracle/
+
+# Harness-internal state (Claude Code lock files, settings)
+.claude/
+
+# Working scratchpads — kept locally, not committed
+notes/j21_scratchpad.md
+
+# Throwaway compiler probes (surface-driven gap bisection)
+wrk_probe/

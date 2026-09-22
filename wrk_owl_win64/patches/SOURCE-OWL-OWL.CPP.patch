@@ -1,0 +1,103 @@
+--- SOURCE/OWL/OWL.CPP
++++ OWL.CPP
+@@ -12,6 +12,13 @@
+ # include <stddef.h>
+ #endif
+ 
++/* --- MDBCC Win64 OWL window-bootstrap shim (MDBCC-01) --- */
++#include "mdwin64thunk.h"
++#ifndef MDBCC_WIN64_THUNK_H
++#error "mdwin64thunk.h overlay missing — Win64 ABI prologue not applied"
++#endif
++extern "C" int mdbcc_owl_win64_marker_owl = 1;  /* O2 patched-objects-used gate */
++
+ LRESULT FAR PASCAL _export StdWndProc(HWND, uint, WPARAM, LPARAM);
+ TProcInstance StdWndProcInstance((FARPROC)StdWndProc);
+ 
+@@ -61,11 +68,16 @@
+   // inadvertently used.
+   //
+   WNDPROC thunk = CreationWindow->GetThunk();
++  TWindow* self = CreationWindow;
+   CreationWindow = 0;
+ 
+-  // Set the thunk as the window proc, & call it with this first message.
++  // Win64 (MDBCC-01): store `this` full-width in GWLP_USERDATA so StdWndProc can
++  // recover it (replacing the 32-bit _EAX thunk), and install the static dispatcher
++  // full-width via SetWindowLongPtrA(GWLP_WNDPROC) (replacing the truncating
++  // SetWindowLong(GWL_WNDPROC, uint32(thunk))). Then call it with this first message.
+   //
+-  SetWindowLong(hWindow, GWL_WNDPROC, uint32(thunk));
++  SetWindowLongPtrA(hWindow, GWLP_USERDATA, (LONG_PTR)self);
++  SetWindowLongPtrA(hWindow, GWLP_WNDPROC, (LONG_PTR)thunk);
+   return (*(WNDPROC)(thunk))(hWindow, message, wParam, lParam);
+ }
+ 
+@@ -74,58 +86,22 @@
+ //
+ #if defined(BI_PLAT_WIN32)
+ 
+-struct TInstanceThunk {
+-  char     Call;
+-  int      Offset;
+-  PROC     WndProcPtr;
+-  TWindow* Window;
+-  char     Code[6];
+-};
+-
+-static const int  CODEDISP = offsetof(TInstanceThunk, Code) -
+-                             offsetof(TInstanceThunk, WndProcPtr);
+-
++// Win64 (MDBCC-01): no per-window executable x86 thunk. CreateInstanceThunk returns
++// the single static dispatcher StdWndProc; `this` is bound to the HWND via GWLP_USERDATA
++// (InitWndProc / TWindow::SubclassWindowFunction), and StdWndProc recovers it from there.
++// The old TInstanceThunk struct + CODEDISP + the emitted x86 trampoline are deleted:
++// a heap RWX code blob with 32-bit pointer fields cannot run as native x64 code.
+ WNDPROC
+ CreateInstanceThunk(TWindow* w)
+ {
+-  TInstanceThunk*  thunk = new TInstanceThunk;
+-
+-  thunk->Call = 0xE8;         // CALL rel32
+-  thunk->Offset = CODEDISP;   // relative displacement to Code[5]
+-  thunk->WndProcPtr = StdWndProcInstance;
+-  thunk->Window = w;
+-
+-  //
+-  // POP ECX
+-  //
+-  // pop return address of call into ecx (address of member "WndProcPtr")
+-  //
+-  thunk->Code[0] = 0x59;
+-
+-  //
+-  // MOV EAX,[ECX+4]
+-  //
+-  // load "Window" into ebx
+-  //
+-  thunk->Code[1] = 0x8B;     // MOV r32,r/m32
+-  thunk->Code[2] = 0x41;     // eax,disp8[ECX]
+-  thunk->Code[3] = 0x04;     // +4
+-
+-  //
+-  // JMP [ECX]
+-  //
+-  // jump to window function StdWndProc
+-  //
+-  thunk->Code[4] = 0xFF;     // JMP r/m32
+-  thunk->Code[5] = 0x21;     // [ECX]
+-
+-  return (WNDPROC)thunk;
++  (void)w;
++  return (WNDPROC)StdWndProc;
+ }
+ 
+ void
+-FreeInstanceThunk(WNDPROC proc)
++FreeInstanceThunk(WNDPROC /*proc*/)
+ {
+-  delete (TInstanceThunk*)proc;
++  // Win64 (MDBCC-01): the static dispatcher is not heap-allocated; nothing to free.
+ }
+ 
+ //

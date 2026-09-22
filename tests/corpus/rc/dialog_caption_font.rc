@@ -1,0 +1,5 @@
+100 DIALOG 10, 20, 200, 100
+CAPTION "Hello"
+FONT 8, "MS Sans Serif"
+BEGIN
+END

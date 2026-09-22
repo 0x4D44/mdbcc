@@ -1,0 +1,13 @@
+# mdbcc cargo configuration.
+
+[alias]
+# Build the toolchain's BC4.52 dependency libraries (OWL/streams/RTL/BIDS) into
+# target/bc45-libs/ using the release bcc/mdar. Run `cargo build --release
+# --bins` first so those tools exist (or use scripts/build-mdbcc.ps1, which
+# chains both steps). Self-skips when the BC4.52 source tree is absent.
+bc45-libs = "run --release --bin build_bc45_libs"
+# Same, for the Win64 target: `-m64` + the OWL/include64 overlay that
+# wrk_owl_win64/patches/ builds from the BC4.52 tree,
+# output in target/bc45-libs/win64/. Consumed by OWL apps whose mdbcc.toml sets
+# `target = "win64"` (e.g. RailC). Isolated from the Win32 build above.
+bc45-libs-win64 = "run --release --bin build_bc45_libs -- --target win64"

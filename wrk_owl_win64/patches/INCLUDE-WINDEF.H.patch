@@ -1,0 +1,19 @@
+--- INCLUDE/WINDEF.H
++++ include64/WINDEF.H
+@@ -158,9 +158,13 @@
+ #endif /* NT_INCLUDED */
+ 
+ /* Types use for passing & returning polymorphic values */
+-typedef UINT WPARAM;
+-typedef LONG LPARAM;
+-typedef LONG LRESULT;
++/* MDBCC Win64 wall-2 overlay: pointer-width message typedefs (was UINT/LONG/LONG). */
++#define MDBCC_WIN64_OVERLAY_WINDEF 1
++typedef unsigned __int64 UINT_PTR;
++typedef __int64          LONG_PTR;
++typedef UINT_PTR WPARAM;
++typedef LONG_PTR LPARAM;
++typedef LONG_PTR LRESULT;
+ 
+ #if !defined(NOMINMAX) && !defined(__cplusplus)
+ 

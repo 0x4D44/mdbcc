@@ -1,0 +1,25 @@
+// G-fix-1 / MAJOR-1: MENUITEM trailing MF_* flag identifiers.
+//
+// Differential fixture against brc32 5.40 — every recognised flag is
+// exercised at least once, and both separators (`,` and `|`) are used.
+// Per brc32 5.40 (verified empirically):
+//   GRAYED       = 0x0001
+//   INACTIVE     = 0x0002
+//   CHECKED      = 0x0008
+//   MENUBARBREAK = 0x0020
+//   MENUBREAK    = 0x0040
+//   HELP         = 0x4000
+//
+// The byte-exact differential test in `tests/rc_res.rs::g_fix_1_menu_flags`
+// confirms mdbcc::rc::write_res emits the same bytes brc32 does.
+
+100 MENU
+BEGIN
+  MENUITEM "A", 200, GRAYED
+  MENUITEM "B", 201, CHECKED
+  MENUITEM "C", 202, GRAYED, INACTIVE
+  MENUITEM "D", 203, MENUBARBREAK
+  MENUITEM "E", 204, MENUBREAK
+  MENUITEM "F", 205, HELP
+  MENUITEM "G", 206, GRAYED | INACTIVE
+END

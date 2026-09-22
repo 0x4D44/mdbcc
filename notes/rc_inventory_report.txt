@@ -1,0 +1,127 @@
+All analysis complete. Final verification of one detail — the report below.
+
+EXISTING-RC-SUPPORT
+===================
+Files: C:\language\mdbcc\src\rc\mod.rs, lexer.rs, parser.rs, res.rs (self-contained module, disjoint from the C front end).
+
+Public API:
+- rc::parse(src: &str) -> Result<RcUnit, RcError>  (mod.rs:329) — lexer + parser convenience. TAKES &str: the CLI driver loads the .rc via std::fs::read_to_string (main.rs:237), so a Latin-1 (non-UTF-8) file fails before lexing even starts.
+- rc::write_res(&RcUnit) -> Vec<u8>  (res.rs:100) — a .res WRITER EXISTS, in-memory bytes only; no CLI path writes a .res file to disk. Differentially tested in tests/rc_res.rs against brc32 5.40.
+- RcUnit (mod.rs:29): Vec<Resource> + optional file-level Language. Resource enum: StringTable | Menu | Accelerators | Dialog. All resource ids are u16 ONLY (MenuResource.id: u16, etc.). No named-id form exists anywhere in the AST.
+- pe_writer::build_rsrc(&RcUnit, rva) (pe_writer.rs:2115) + link::merge_rsrc_unit (link/mod.rs:601) for PE embedding.
+
+Statements supported today:
+- LANGUAGE p, s (file-level and per-resource), numeric only.
+- STRINGTABLE [DISCARDABLE|PRELOAD|LOADONCALL|MOVEABLE|FIXED] [LANGUAGE] BEGIN id [,] "str" ... END — numeric ids only; writer bundles by (id>>4)+1.
+- <int> MENU ... BEGIN MENUITEM "t", id [,MF-flags] | MENUITEM SEPARATOR | POPUP "t" [flags] BEGIN..END END. MF flags: GRAYED/INACTIVE/CHECKED/MENUBARBREAK/MENUBREAK/HELP, separated by , or |.
+- <int> ACCELERATORS ... ("^X"/char/int key, cmd, VIRTKEY/ASCII/NOINVERT/SHIFT/CONTROL/ALT).
+- <int> DIALOG x,y,cx,cy with STYLE/EXSTYLE/CAPTION/FONT/MENU/CLASS/LANGUAGE/memflags; controls: PUSHBUTTON, DEFPUSHBUTTON, LTEXT, RTEXT, CTEXT, EDITTEXT, GROUPBOX, generic CONTROL. DIALOGEX rejected loudly.
+
+Hard limits relevant to RAILC.RC:
+- Lexer: no '-' (unary minus is "unexpected character", lexer.rs:277), no integer suffix L (0x20L fails), no single-quoted raw-hex data, no #/{/} tokens, non-UTF-8 string bytes rejected (lexer.rs:358).
+- No preprocessor at all (#define/#include/#ifdef unhandled).
+- STYLE/style fields take a SINGLE Int token (parser.rs:983) — `DS_MODALFRAME | WS_POPUP` expressions fail; no built-in WS_*/BS_*/SS_*/DS_* symbol table.
+- parse_optional_control_styles force-ORs 0x40010000 (WS_CHILD|WS_TABSTOP) into explicit shorthand styles (parser.rs:966) — contradicts the golden (see below).
+- Writer emission order is type-tiered (MENU, DIALOG, ACCEL, STRING — res.rs:104) and default language is 0x0809 (res.rs:84); header type/name always ordinal (hsize fixed 32).
+- No ICON/BITMAP/RCDATA/CURSOR/VERSIONINFO support anywhere.
+
+RAILC-RC-REQUIREMENTS
+=====================
+Root: C:\language\railc\RESOURCE\RAILC.RC (1347 lines, CRLF; NOT in the railc root — note the task premise "C:\language\railc\RAILC.RC" is wrong, only RESOURCE\ has it). One include: C:\language\railc\RESOURCE\ABOUTBOX.RC (15 lines). No windows.h-style header is included — all WS_*/BS_*/SS_*/DS_* symbols must be compiler-built-ins (Borland brc has them compiled in).
+
+Preprocessor directives used:
+- #define DIGITAL 800 (RAILC.RC:1) — macro is used as a RESOURCE ID: `DIGITAL BITMAP "digital.bmp"` (RAILC.RC:98); golden confirms name=#800, so object-macro expansion of ids is mandatory.
+- #include "aboutbox.rc" (RAILC.RC:39) — resolved relative to the including file's directory.
+- #ifdef _DEBUG / #else / #endif (RAILC.RC:1321-1325) inside the VERSIONINFO body (_DEBUG undefined => FILEFLAGS 0x0L branch).
+
+Resource statement types used (golden type ordinal in parens):
+- MENU (4): MAIN_MENU MENU (RAILC.RC:3) — POPUP/MENUITEM/SEPARATOR only, no MF flags.
+- DIALOG (5): ABOUTBOX (ABOUTBOX.RC:1), CONFIG (RAILC.RC:201), FINISH (:551), START (:1300). All have STYLE expr, CAPTION, FONT 8 "MS Sans Serif".
+- ICON (3 + 14): 6 statements — MD ICON "md.ico" (:41, file ref); AMAIN (:44), ARRIVAL (:99), DEPART (:150), LOCOYARD (:569), PLATFORM (:620) inline raw-data.
+- BITMAP (2): 7 statements — DOWNBUTTON "downbutt.bmp" (:96), UPBUTTON "upbutt.bmp" (:97), DIGITAL "digital.bmp" (:98), SPLASHWN "splashwn.bmp" (:567), DMU "dmu.bmp" (:1299) file refs; TB_MAINWIN (:222, body in { } braces!) and LOCO (:671, BEGIN/END) inline raw-data.
+- RCDATA (10): BEEP RCDATA "beep.wav" (:221) — file contents verbatim.
+- STRINGTABLE (6): one block (:534), ids 10000-10013 (numeric), long strings with \n escapes.
+- VERSIONINFO (16): `1 VERSIONINFO` (:1317) — FILEVERSION 2,3,0,0 / PRODUCTVERSION / FILEFLAGSMASK 0x20L / FILEFLAGS / FILEOS 0x1L / FILETYPE 0x1L / FILESUBTYPE, BLOCK "StringFileInfo" / BLOCK "040904E4" / VALUE "key", "value\0","\0",... (multi-string comma-concatenated values). NOTE: no VarFileInfo block in source.
+- No ACCELERATORS, CURSOR, or DIALOGEX.
+
+Resource id forms: NAMED string ids for everything (MAIN_MENU, ABOUTBOX, MD, AMAIN, DOWNBUTTON, UPBUTTON, ARRIVAL, DEPART, CONFIG, BEEP, TB_MAINWIN, FINISH, SPLASHWN, LOCOYARD, PLATFORM, LOCO, DMU, START) except numeric-via-macro DIGITAL=800 and literal 1 for VERSIONINFO.
+
+Inline raw data blocks: Borland single-quoted hex strings, e.g. RAILC.RC:46 `'00 00 01 00 01 00 20 20 10 00 00 00 00 00 E8 02'`, one per line, inside BEGIN/END or { }. Each quoted string is a run of hex byte pairs separated by spaces.
+
+Latin-1: RAILC.RC:1338 contains a raw 0xA9 byte (© in "Copyright � Martin G Davidson 1993-2008") — invalid UTF-8; must be decoded as Latin-1 -> U+00A9 -> UTF-16 0x00A9. ABOUTBOX.RC:7 spells it as octal escape \251 instead (golden dialog bytes confirm both become a9 00).
+
+Dialog control classes/options used: DEFPUSHBUTTON, PUSHBUTTON, LTEXT, CTEXT, ICON shorthand (ABOUTBOX.RC:10-11 — `ICON "AMAIN", 1, 103, 14, 18, 20, WS_CHILD | WS_VISIBLE` and `ICON "md", 1, ...` with NO style), generic CONTROL with class strings "BUTTON"/"button"/"static" (case varies) and styles BS_AUTORADIOBUTTON, BS_AUTOCHECKBOX, BS_GROUPBOX, SS_BLACKRECT. Control id -1 used 5x (e.g. RAILC.RC:217). Style expressions everywhere: identifiers OR'd with `|`. Symbols needed (verified against golden bytes): WS_POPUP 0x80000000, WS_CHILD 0x40000000, WS_VISIBLE 0x10000000, WS_CAPTION 0x00C00000, WS_SYSMENU 0x00080000, WS_GROUP 0x00020000, WS_TABSTOP 0x00010000, DS_MODALFRAME 0x80, BS_AUTOCHECKBOX 3, BS_AUTORADIOBUTTON 9, BS_GROUPBOX 7, SS_BLACKRECT 4 (DS_SETFONT 0x40 added implicitly by FONT — golden confirms).
+
+Referenced binaries — ALL exist in C:\language\railc\RESOURCE (case-insensitive FS): MD.ICO (766), DOWNBUTT.BMP (396), UPBUTT.BMP (396), DIGITAL.BMP (5638), SPLASHWN.BMP (71342), DMU.BMP (13138), BEEP.WAV (1162).
+
+Style-merge semantics proven by golden bytes (differs from current parser):
+- LTEXT with explicit `WS_CHILD|WS_VISIBLE|WS_GROUP` => 0x50020000 exactly (NO forced WS_TABSTOP; current parser.rs:966 would produce 0x50030000 — wrong).
+- DEFPUSHBUTTON explicit style => user | BS_DEFPUSHBUTTON(1) = 0x50010001. Rule: explicit style = user_style | shorthand-class-constant, nothing else forced.
+- ICON shorthand default/explicit => 0x50000003 (SS_ICON|WS_CHILD|WS_VISIBLE), class STATIC ordinal 0x0082, title = NAME STRING ("AMAIN"/"md" verbatim case), cx/cy written as given (18,20 — not zeroed).
+
+GOLDEN-RES-INVENTORY
+====================
+Oracle: C:\language\mdbcc\wrk_oracle\railc_golden\railc.res (121040 bytes; byte-identical to C:\language\railc\RESOURCE\railc.res). Parser script kept at C:\language\mdbcc\wrk_oracle\railc_golden\dump_res.py. 28 records, in order (type, name, lang, memflags, datasize; hsize = 32-byte fixed part + ordinal-or-UTF16-name, DWORD-padded; DataVersion/Version/Characteristics all 0):
+
+[0]  type=#0  name=#0            lang=0 mem=0x0000 dsize=0      (32-byte null sentinel)
+[1]  type=#4  name="MAIN_MENU"   lang=0 mem=0x1030 dsize=466    data: 00 00 00 00 10 00 26 00 47 00 61 00 6d 00 65 00 (MenuHeader 0,0; MF_POPUP; "&Game")
+[2]  type=#5  name="ABOUTBOX"    lang=0 mem=0x1030 dsize=462    data: c0 00 c8 90 ... (style 0x90C800C0, cdit 8, 20,108,349,92)
+[3]  type=#3  name=#1            lang=0 mem=0x1010 dsize=744    data: 28 00 00 00 20 00 ... (BITMAPINFOHEADER, MD's image)
+[4]  type=#14 name="MD"          lang=0 mem=0x1030 dsize=20     data: 00 00 01 00 01 00 20 20 10 00 01 00 04 00 e8 02 00 00 01 00
+[5]  type=#3  name=#2            lang=0 mem=0x1010 dsize=744    (AMAIN image)
+[6]  type=#14 name="AMAIN"       lang=0 mem=0x1030 dsize=20     (...same, nID=02 00)
+[7]  type=#2  name="DOWNBUTTON"  lang=0 mem=0x0030 dsize=368
+[8]  type=#2  name="UPBUTTON"    lang=0 mem=0x0030 dsize=368
+[9]  type=#2  name=#800          lang=0 mem=0x0030 dsize=5624   (DIGITAL via #define)
+[10] type=#3  name=#3            lang=0 mem=0x1010 dsize=744    (ARRIVAL image)
+[11] type=#14 name="ARRIVAL"     lang=0 mem=0x1030 dsize=20
+[12] type=#3  name=#4            lang=0 mem=0x1010 dsize=744    (DEPART image)
+[13] type=#14 name="DEPART"      lang=0 mem=0x1030 dsize=20
+[14] type=#5  name="CONFIG"      lang=0 mem=0x1030 dsize=812    data: c0 00 c8 80 (style 0x80C800C0)
+[15] type=#10 name="BEEP"        lang=0 mem=0x0030 dsize=1162   data: 52 49 46 46 ("RIFF" — beep.wav verbatim, full file)
+[16] type=#2  name="TB_MAINWIN"  lang=0 mem=0x0030 dsize=4904
+[17] type=#5  name="FINISH"      lang=0 mem=0x1030 dsize=550
+[18] type=#2  name="SPLASHWN"    lang=0 mem=0x0030 dsize=71328
+[19] type=#3  name=#5            lang=0 mem=0x1010 dsize=744    (LOCOYARD image)
+[20] type=#14 name="LOCOYARD"    lang=0 mem=0x1030 dsize=20
+[21] type=#3  name=#6            lang=0 mem=0x1010 dsize=744    (PLATFORM image)
+[22] type=#14 name="PLATFORM"    lang=0 mem=0x1030 dsize=20
+[23] type=#2  name="LOCO"        lang=0 mem=0x0030 dsize=9984
+[24] type=#2  name="DMU"         lang=0 mem=0x0030 dsize=13124
+[25] type=#5  name="START"       lang=0 mem=0x1030 dsize=386
+[26] type=#16 name=#1            lang=0 mem=0x0030 dsize=898    data: 82 03 34 00 00 00 "VS_VERSION_INFO" + VS_FIXEDFILEINFO (sig FEEF04BD, ver 1.0, FileVersion 0x00020003/0, FileFlagsMask 0x20, OS 1, Type 1)
+[27] type=#6  name=#626          lang=0 mem=0x1030 dsize=4888   data: bc 00 41 00 6e 00 ... (slot 0 len 188 "An e…"; bundle (10000>>4)+1=626, slots 0-13 filled, 14-15 empty)
+
+Byte-level rules the writer must reproduce:
+- Emission order = SOURCE ORDER (with #include spliced inline), EXCEPT RT_STRING bundles are deferred to the very end. NOT the current type-tier order in res.rs:104.
+- Every record lang=0x0000 (NOT res.rs's 0x0809 default — this is the BC4.5-era Borland default; must be the default for this profile).
+- Mem flags: MENU/DIALOG/GROUP_ICON/STRING 0x1030; RT_ICON 0x1010 (MOVEABLE|DISCARDABLE, no PURE); BITMAP/RCDATA/VERSION 0x0030 (MOVEABLE|PURE).
+- Header: type then name, each FFFF+ord or UTF-16LE NUL string (names emitted UPPERCASE as written in source), pad to DWORD, then DataVersion u32 0, mem u16, lang u16, Version u32 0, Characteristics u32 0. Data padded to DWORD before next record.
+- ICON statement => TWO records: RT_ICON (#3) with a GLOBAL sequential ordinal name (1..6 in source order) emitted FIRST, then RT_GROUP_ICON (#14) with the source name. RT_ICON payload = the .ico file's image bytes (at ICONDIRENTRY.dwImageOffset, length dwBytesInRes; 766-22=744 for MD.ICO). GRPICONDIR payload (20 B) = idReserved 0, idType 1, idCount 1, then width/height/colorCount from the ICONDIRENTRY (20 20 10 00) but wPlanes/wBitCount taken from the EMBEDDED BITMAPINFOHEADER (01 00 04 00 — the .ico dir entry itself says 0,0), dwBytesInRes, nID u16. Inline 'hex' icon bodies are a complete .ico file image — same conversion.
+- BITMAP payload = file bytes minus the 14-byte BITMAPFILEHEADER, length computed from the header: (bfOffBits-14) + biSizeImage — NOT filesize-14 (DOWNBUTT.BMP/UPBUTT.BMP have 14 trailing junk bytes: 396 on disk, 368 in res). Inline bitmap bodies: same stripping (TB_MAINWIN 4918->4904).
+- RCDATA file payload = file verbatim.
+- VERSIONINFO = standard Win32 UTF-16 VS_VERSIONINFO tree (wLength/wValueLength/wType triplets, 52-byte VS_FIXEDFILEINFO, nested StringFileInfo/StringTable/String, DWORD padding); VALUE's comma-separated extra "\0" strings concatenate into the value.
+
+INTEGRATION-SEAM
+================
+- bcc driver (C:\language\mdbcc\src\main.rs:236-249): PE mode auto-detects sibling .rc, fs::read_to_string + rc::parse → Option<RcUnit> → compile_to_pe_with_rc_defines. read_to_string FAILS on the Latin-1 RAILC.RC byte 0xA9.
+- compile.rs:179-184: exe = link::link_single(...); then link::merge_rsrc_unit(exe, rc) — x64 in-process path only (machine hardcoded Amd64, compile.rs:166). main.rs:198-205: -m32 + PE is rejected; railc is built `bcc -c -m32` per TU then mdlink -m32.
+- link/mod.rs:601 merge_rsrc_unit → pe_writer::merge_rsrc_into_pe (pe_writer.rs:4236) → append_rsrc_to_pe (pe_writer.rs:4261): parses the built PE, appends a .rsrc section, patches NumberOfSections, SizeOfInitializedData (opt+8), SizeOfImage (opt+56), DataDirectory[2].
+- CONFIRMED PE32 BUG at pe_writer.rs:4326: `let dd_off = opt_hdr_off + 112 + 2 * 8;` — 112 is the PE32+ DataDirectory base. The function never reads the optional-header Magic. In a PE32 (magic 0x10B) the directories start at opt_hdr_off+96, so Resource is at +112; writing at +128 lands on DataDirectory[4] (Certificate Table) — Resource stays zero AND the security dir is corrupted. SizeOfInitializedData (+8) and SizeOfImage (+56) offsets are coincidentally identical in PE32/PE32+, so the dd base is the only fix needed (read Magic, base = 96 for 0x10B, 112 for 0x20B).
+- mdlink CLI (src/bin/mdlink.rs:76-101): inputs are only .lib → Input::Archive, else Input::CoffBytes. NO .res/.rc handling. link/mod.rs:356-361: Input::ResFile returns LinkError::Internal "not yet supported". So today there is NO route to get a .rsrc into the mdlink-linked PE32 railc.exe.
+- pe_writer::build_rsrc (pe_writer.rs:2115) / emit_rsrc (2197): builds the 3-level tree from typed RcUnit collectors; id-entries ONLY (write_resource_directory always called with named=0, pe_writer.rs:2257/2269/2282) — no named directory entries, no ICON/BITMAP/RCDATA/GROUP_ICON/VERSION types, one language per resource. Needs generalising to flat (type, name-or-ordinal, lang, data) entries — exactly what a parsed .res file yields.
+
+GAP-LIST (ordered smallest-first; each = one shippable increment)
+=================================================================
+1. PE32 DataDirectory fix in append_rsrc_to_pe (pe_writer.rs:4326): read Magic at opt_hdr_off, dirs base 96 (0x10B) vs 112 (0x20B). Acceptance: new unit test links an i386 object to PE32, merges an RcUnit, re-parses headers: DataDirectory[2].VirtualAddress == .rsrc RVA, DataDirectory[4] untouched; existing PE32+ rsrc tests stay green.
+2. Byte-clean front door: rc::parse_bytes(&[u8]) decoding Latin-1 (0x80-0xFF -> U+0080-U+00FF) in string literals; main.rs switches to fs::read. Acceptance: a string containing raw byte 0xA9 round-trips to UTF-16 0x00A9 in write_res output.
+3. Lexer extensions: unary minus on integers, L/l suffix, single-quoted raw-hex literals ('42 4D ...' -> Vec<u8> token), { } as BEGIN/END aliases. Acceptance: lexer unit tests; `CONTROL "x", -1, ...` parses; FINISH dialog control id -1 emits 0xFFFF.
+4. RC preprocessor: #define object macros (with id-position expansion), #include "..." relative to includer, #ifdef/#else/#endif, plus a CLI/-D-style define set (empty for railc => _DEBUG undefined). Acceptance: `#define DIGITAL 800` + `DIGITAL BITMAP` yields name ordinal #800; #include splices ABOUTBOX.RC at line 39 position.
+5. Named resource ids + style expressions: ResId::{Ord(u16), Name(String)} replacing u16 ids across the AST; built-in symbol table (WS_/DS_/BS_/SS_ values above) and `|` expression evaluation for STYLE/EXSTYLE/control styles; fix explicit-shorthand-style rule to user|class-constant (remove the forced 0x40010000 at parser.rs:966); add ICON control shorthand (class 0x0082, default SS_ICON|WS_CHILD|WS_VISIBLE, name-string title). Acceptance: ABOUTBOX/CONFIG/FINISH/START DIALOG payloads byte-equal to golden entries [2][14][17][25]; MAIN_MENU payload equals entry [1].
+6. .res writer fidelity: string-form type/name headers with DWORD padding; source-order emission with RT_STRING bundles last; default lang 0x0000 profile; per-type mem-flag defaults (ICON 0x1010, BITMAP/RCDATA/VERSION 0x0030). Acceptance: header-by-header compare of types 4/5/6 records against golden via dump_res.py logic.
+7. ICON/BITMAP/RCDATA resources: file refs (resolved relative to the .rc) and inline raw-data bodies; .ico split into RT_ICON (global ordinal counter) + synthesised GRPICONDIR (planes/bitcount from embedded BITMAPINFOHEADER); BMP strip with header-computed size ((bfOffBits-14)+biSizeImage); RCDATA verbatim. Acceptance: golden entries [3]-[13], [15], [16], [18]-[24] byte-equal.
+8. VERSIONINFO statement + writer (fixed-info params incl. L-suffixed ints and 2,3,0,0 quads; BLOCK/VALUE tree with multi-string values; DWORD padding rules). Acceptance: golden entry [26] (898 bytes) byte-equal.
+9. Full-file oracle: compile RESOURCE\RAILC.RC end-to-end; write .res. Acceptance: output byte-identical to wrk_oracle\railc_golden\railc.res (121040 bytes) — THE acceptance test for the rc compiler.
+10. PE integration: generalise emit_rsrc to flat entries with named directory entries (NumberOfNamedEntries, case-insensitive-sorted name strings before id entries, all 8 types present here: 2,3,4,5,6,10,14,16); add .res input to mdlink (parse .res records -> flat entries; wire Input::ResFile through link()) using the gap-1-fixed append path for PE32. Acceptance: mdlink -m32 *.obj railc.res produces a PE32 whose .rsrc round-trips (extract resources, compare against the .res payloads) and whose DataDirectory[2] is correct; railc.exe loads its menu/icons/dialogs.
+
+Risks/notes: (a) the source-order .res emission in gap 6 contradicts res.rs:104's brc32-5.40-verified tier order — the golden here is BC4.5-era Borland; make order+default-lang a writer profile rather than breaking the existing differential corpus in tests/rc_res.rs; (b) resource names appear already-uppercase in source so case-folding behaviour is unverified — uppercase on emit (rc.exe behaviour) but keep control-title strings verbatim ("md" stays lowercase in golden entry [2]); (c) generic CONTROL style WS_CHILD forcing is unverifiable from this corpus (all sources spell it explicitly) — leave verbatim and differential-test.

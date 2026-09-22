@@ -1,0 +1,572 @@
+diff --git a/src/rc/lexer.rs b/src/rc/lexer.rs
+index 648da2f..9fc50e7 100644
+--- a/src/rc/lexer.rs
++++ b/src/rc/lexer.rs
+@@ -123,6 +123,9 @@ pub enum Keyword {
+     /// `GROUPBOX "text", id, x, y, cx, cy [, style [, exstyle]]` —
+     /// labeled group rectangle.
+     GroupBox,
++    /// `ICON "resname", id, x, y, cx, cy [, style [, exstyle]]` —
++    /// shorthand static-icon control inside a DIALOG.
++    Icon,
+     // ---- MENUITEM / POPUP trailing flag keywords ----
+     //
+     // brc32-observed (5.40) constants for the optional MF_* identifiers
+@@ -565,6 +568,7 @@ fn keyword_lookup(s: &str) -> Option<Keyword> {
+         "ctext" => CText,
+         "edittext" => EditText,
+         "groupbox" => GroupBox,
++        "icon" => Icon,
+         // MENUITEM / POPUP trailing flag identifiers (G-fix-1 / MAJOR-1).
+         "grayed" => Grayed,
+         "inactive" => Inactive,
+diff --git a/src/rc/mod.rs b/src/rc/mod.rs
+index 474d8d1..95a834c 100644
+--- a/src/rc/mod.rs
++++ b/src/rc/mod.rs
+@@ -83,16 +83,44 @@ pub struct StringTableEntry {
+     pub col: u32,
+ }
+ 
+-/// `<id> MENU [flags] BEGIN <items> END` — Phase G / G4. v1 supports
+-/// numeric ids only (no symbolic-constant resolution; that is G-future,
+-/// per HLD §G4). The items form a tree: a top-level item is either a
++/// Resource name/id used by top-level resources. Win32 resources can be
++/// addressed either by ordinal (`MAKEINTRESOURCE`) or by a string name.
++#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub enum ResId {
++    Ord(u16),
++    Name(String),
++}
++
++impl ResId {
++    pub fn as_ord(&self) -> Option<u16> {
++        match self {
++            ResId::Ord(v) => Some(*v),
++            ResId::Name(_) => None,
++        }
++    }
++}
++
++impl From<u16> for ResId {
++    fn from(value: u16) -> Self {
++        ResId::Ord(value)
++    }
++}
++
++impl PartialEq<u16> for ResId {
++    fn eq(&self, other: &u16) -> bool {
++        matches!(self, ResId::Ord(v) if v == other)
++    }
++}
++
++/// `<id> MENU [flags] BEGIN <items> END` — Phase G / G4. The items form a
++/// tree: a top-level item is either a
+ /// `MENUITEM "text", id` leaf or a `POPUP "text" BEGIN <nested items>
+ /// END` subtree. Nesting depth in v1 is bounded at 2 (top → popups →
+ /// items); deeper nesting is parsable but documented as G-future.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct MenuResource {
+     /// Resource id (the menu's name in `LoadMenuA(NULL, MAKEINTRESOURCE(id))`).
+-    pub id: u16,
++    pub id: ResId,
+     /// Memory/loader flags (currently a single set; v1 supports the same
+     /// shared `MemoryFlags` vocabulary as STRINGTABLE).
+     pub flags: MemoryFlags,
+@@ -139,7 +167,7 @@ pub enum MenuItem {
+ pub struct AcceleratorTable {
+     /// Resource id (the table's name in
+     /// `LoadAcceleratorsA(NULL, MAKEINTRESOURCE(id))`).
+-    pub id: u16,
++    pub id: ResId,
+     /// Memory/loader flags (shared `MemoryFlags` vocabulary).
+     pub flags: MemoryFlags,
+     /// Optional per-resource LANGUAGE override.
+@@ -176,7 +204,7 @@ pub struct AcceleratorEntry {
+ /// brc32-observed model — see `src/rc/parser.rs::parse_dialog`).
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct DialogResource {
+-    pub id: u16,
++    pub id: ResId,
+     pub flags: MemoryFlags,
+     pub language: Option<Language>,
+     pub x: i16,
+@@ -283,6 +311,7 @@ pub const STYLE_RTEXT: u32 = 0x5002_0002;
+ pub const STYLE_CTEXT: u32 = 0x5002_0001;
+ pub const STYLE_EDITTEXT: u32 = 0x5081_0000;
+ pub const STYLE_GROUPBOX: u32 = 0x5000_0007;
++pub const STYLE_ICON: u32 = 0x5000_0003;
+ 
+ /// `LANGUAGE primary, sub` — Win32 language identifier components.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+diff --git a/src/rc/parser.rs b/src/rc/parser.rs
+index 39ff681..83c9112 100644
+--- a/src/rc/parser.rs
++++ b/src/rc/parser.rs
+@@ -17,8 +17,8 @@ use super::lexer::{Keyword, Token, TokenKind};
+ use super::{
+     AcceleratorEntry, AcceleratorTable, CC_BUTTON, CC_COMBOBOX, CC_EDIT, CC_LISTBOX, CC_SCROLLBAR,
+     CC_STATIC, ControlClass, DIALOG_DEFAULT_STYLE, DS_SETFONT, DialogControl, DialogResource,
+-    Language, MemoryFlags, MenuItem, MenuResource, RcError, RcUnit, ResRef, Resource,
+-    STYLE_CTEXT, STYLE_DEFPUSHBUTTON, STYLE_EDITTEXT, STYLE_GROUPBOX, STYLE_LTEXT,
++    Language, MemoryFlags, MenuItem, MenuResource, RcError, RcUnit, ResId, ResRef, Resource,
++    STYLE_CTEXT, STYLE_DEFPUSHBUTTON, STYLE_EDITTEXT, STYLE_GROUPBOX, STYLE_ICON, STYLE_LTEXT,
+     STYLE_PUSHBUTTON, STYLE_RTEXT, StringTable, StringTableEntry, WS_CAPTION,
+ };
+ 
+@@ -52,10 +52,10 @@ impl<'t> Parser<'t> {
+                     unit.resources.push(Resource::StringTable(st));
+                 }
+                 // `<id> MENU …` / `<id> ACCELERATORS …` / `<id> DIALOG[EX] …`
+-                // — G4/G5a. The id is a numeric literal in v1 (symbolic ids =
+-                // G-future per HLD §G4); we peek the next token to
+-                // disambiguate from a stray int.
+-                TokenKind::Int(_) => match self.peek_kind_n(1) {
++                // — G4/G5a. Gap 5 extends the resource id from ordinal-only
++                // to ordinal-or-name; we still peek the next token to
++                // disambiguate from a stray literal/identifier.
++                TokenKind::Int(_) | TokenKind::Ident(_) => match self.peek_kind_n(1) {
+                     Some(TokenKind::Keyword(Keyword::Menu)) => {
+                         let m = self.parse_menu()?;
+                         unit.resources.push(Resource::Menu(m));
+@@ -69,6 +69,15 @@ impl<'t> Parser<'t> {
+                         let d = self.parse_dialog()?;
+                         unit.resources.push(Resource::Dialog(d));
+                     }
++                    Some(TokenKind::Keyword(Keyword::Icon)) => {
++                        let t = self.peek_n(1).expect("peeked token exists");
++                        return self.err_at(
++                            "top-level ICON resources are not supported yet (rc gap 7)"
++                                .to_string(),
++                            t.line,
++                            t.col,
++                        );
++                    }
+                     _ => {
+                         let t = self.peek();
+                         return self.err_at(
+@@ -273,7 +282,7 @@ impl<'t> Parser<'t> {
+ 
+     /// `<id> MENU [flags…] [LANGUAGE …] BEGIN <items> END`.
+     fn parse_menu(&mut self) -> PResult<MenuResource> {
+-        let id = self.parse_u16_with_label("MENU resource id")?;
++        let id = self.parse_resid_with_label("MENU resource id")?;
+         self.expect_keyword(Keyword::Menu, "MENU")?;
+ 
+         let mut flags = MemoryFlags::default();
+@@ -440,7 +449,7 @@ impl<'t> Parser<'t> {
+ 
+     /// `<id> ACCELERATORS [flags…] [LANGUAGE …] BEGIN <entries> END`.
+     fn parse_accelerators(&mut self) -> PResult<AcceleratorTable> {
+-        let id = self.parse_u16_with_label("ACCELERATORS resource id")?;
++        let id = self.parse_resid_with_label("ACCELERATORS resource id")?;
+         self.expect_keyword(Keyword::Accelerators, "ACCELERATORS")?;
+ 
+         let mut flags = MemoryFlags::default();
+@@ -593,7 +602,7 @@ impl<'t> Parser<'t> {
+     /// - `CAPTION` present ⇒ `style |= WS_CAPTION` (0x00C00000).
+     /// - `FONT` present ⇒ `style |= DS_SETFONT` (0x40).
+     fn parse_dialog(&mut self) -> PResult<DialogResource> {
+-        let id = self.parse_u16_with_label("DIALOG resource id")?;
++        let id = self.parse_resid_with_label("DIALOG resource id")?;
+         // Eat DIALOG. DIALOGEX is rejected loudly — the writer cannot emit
+         // DLGTEMPLATEEX (G-future-4) and the prior behaviour of silently
+         // emitting classic DLGTEMPLATE bytes for a DIALOGEX source violated
+@@ -647,11 +656,11 @@ impl<'t> Parser<'t> {
+             match self.peek_kind() {
+                 TokenKind::Keyword(Keyword::Style) => {
+                     self.advance();
+-                    style = Some(self.parse_u32_with_label("STYLE")?);
++                    style = Some(self.parse_style_expr_with_label("STYLE")?);
+                 }
+                 TokenKind::Keyword(Keyword::ExStyle) => {
+                     self.advance();
+-                    ex_style = self.parse_u32_with_label("EXSTYLE")?;
++                    ex_style = self.parse_style_expr_with_label("EXSTYLE")?;
+                 }
+                 TokenKind::Keyword(Keyword::Caption) => {
+                     self.advance();
+@@ -786,6 +795,10 @@ impl<'t> Parser<'t> {
+                 self.advance();
+                 self.parse_text_control(STYLE_GROUPBOX, ControlClass::Predefined(CC_BUTTON))
+             }
++            TokenKind::Keyword(Keyword::Icon) => {
++                self.advance();
++                self.parse_icon_control()
++            }
+             TokenKind::Keyword(Keyword::EditText) => {
+                 self.advance();
+                 // EDITTEXT has no text in source — title is empty. id is
+@@ -799,8 +812,7 @@ impl<'t> Parser<'t> {
+                 let cx = self.parse_i16_with_label("EDITTEXT cx")?;
+                 self.eat_optional_comma();
+                 let cy = self.parse_i16_with_label("EDITTEXT cy")?;
+-                let (style, ex_style) =
+-                    self.parse_optional_control_styles(STYLE_EDITTEXT, true)?;
++                let (style, ex_style) = self.parse_optional_control_styles(STYLE_EDITTEXT)?;
+                 Ok(DialogControl {
+                     text: ResRef::Name(String::new()),
+                     id,
+@@ -819,7 +831,7 @@ impl<'t> Parser<'t> {
+             }
+             _ => self.err_at(
+                 format!(
+-                    "expected dialog control (PUSHBUTTON, DEFPUSHBUTTON, LTEXT, RTEXT, CTEXT, EDITTEXT, GROUPBOX, CONTROL) or END, found {}",
++                    "expected dialog control (PUSHBUTTON, DEFPUSHBUTTON, LTEXT, RTEXT, CTEXT, EDITTEXT, GROUPBOX, ICON, CONTROL) or END, found {}",
+                     describe_kind(&tok.kind)
+                 ),
+                 tok.line,
+@@ -848,7 +860,7 @@ impl<'t> Parser<'t> {
+         let cx = self.parse_i16_with_label("control cx")?;
+         self.eat_optional_comma();
+         let cy = self.parse_i16_with_label("control cy")?;
+-        let (style, ex_style) = self.parse_optional_control_styles(default_style, true)?;
++        let (style, ex_style) = self.parse_optional_control_styles(default_style)?;
+         Ok(DialogControl {
+             text: ResRef::Name(text),
+             id,
+@@ -862,6 +874,36 @@ impl<'t> Parser<'t> {
+         })
+     }
+ 
++    /// Parse an `ICON` shorthand control:
++    /// `ICON "resname", id, x, y, cx, cy [, style [, exstyle]]`.
++    /// brc32 emits it as a STATIC-class control whose title is the icon
++    /// resource name string and whose class-specific style bit is SS_ICON.
++    fn parse_icon_control(&mut self) -> PResult<DialogControl> {
++        let text = self.parse_resref_with_label("ICON resource")?;
++        self.eat_optional_comma();
++        let id = self.parse_i16_with_label("ICON id")?;
++        self.eat_optional_comma();
++        let x = self.parse_i16_with_label("ICON x")?;
++        self.eat_optional_comma();
++        let y = self.parse_i16_with_label("ICON y")?;
++        self.eat_optional_comma();
++        let cx = self.parse_i16_with_label("ICON cx")?;
++        self.eat_optional_comma();
++        let cy = self.parse_i16_with_label("ICON cy")?;
++        let (style, ex_style) = self.parse_optional_control_styles(STYLE_ICON)?;
++        Ok(DialogControl {
++            text,
++            id,
++            class: ControlClass::Predefined(CC_STATIC),
++            style,
++            ex_style,
++            x,
++            y,
++            cx,
++            cy,
++        })
++    }
++
+     /// Parse the generic `CONTROL "text", id, "class"-or-ord, style, x,
+     /// y, cx, cy [, exstyle]` form. brc32 case-insensitively normalises
+     /// the class string to its ordinal when it matches one of the
+@@ -904,7 +946,7 @@ impl<'t> Parser<'t> {
+             }
+         };
+         self.eat_optional_comma();
+-        let style = self.parse_u32_with_label("CONTROL style")?;
++        let style = self.parse_style_expr_with_label("CONTROL style")?;
+         self.eat_optional_comma();
+         let x = self.parse_i16_with_label("CONTROL x")?;
+         self.eat_optional_comma();
+@@ -925,7 +967,7 @@ impl<'t> Parser<'t> {
+                 self.peek_kind(),
+                 TokenKind::Int(_) | TokenKind::Ident(_)
+             ) {
+-                ex_style = self.parse_u32_with_label("CONTROL exstyle")?;
++                ex_style = self.parse_style_expr_with_label("CONTROL exstyle")?;
+             }
+         }
+         Ok(DialogControl {
+@@ -942,16 +984,11 @@ impl<'t> Parser<'t> {
+     }
+ 
+     /// Parse the optional `[, style [, exstyle]]` tail of a shorthand
+-    /// control. When `force_wschild_tabstop` is true and the user
+-    /// supplied an explicit style, brc32 OR's in WS_CHILD (0x40000000)
+-    /// and WS_TABSTOP (0x00010000) — verified for PUSHBUTTON style
+-    /// override on brc32 5.40. The default style (no explicit style) is
+-    /// returned unchanged.
+-    fn parse_optional_control_styles(
+-        &mut self,
+-        default_style: u32,
+-        force_wschild_tabstop: bool,
+-    ) -> PResult<(u32, u32)> {
++    /// control. With an explicit style, brc32 keeps the user's window-style
++    /// expression verbatim and ORs in only the shorthand class bits
++    /// (`BS_DEFPUSHBUTTON`, `SS_ICON`, etc.). It does not force
++    /// `WS_CHILD|WS_TABSTOP`; RAILC.RC's LTEXT controls prove that profile.
++    fn parse_optional_control_styles(&mut self, default_style: u32) -> PResult<(u32, u32)> {
+         // No comma → no override.
+         if !matches!(self.peek_kind(), TokenKind::Comma) {
+             return Ok((default_style, 0));
+@@ -962,33 +999,51 @@ impl<'t> Parser<'t> {
+         if !matches!(self.peek_kind(), TokenKind::Int(_) | TokenKind::Ident(_)) {
+             return Ok((default_style, 0));
+         }
+-        let user_style = self.parse_u32_with_label("control style")?;
+-        let style = if force_wschild_tabstop {
+-            user_style | 0x40010000
+-        } else {
+-            user_style
+-        };
++        let user_style = self.parse_style_expr_with_label("control style")?;
++        let style = user_style | (default_style & 0x0000_FFFF);
+         let mut ex_style = 0;
+         if matches!(self.peek_kind(), TokenKind::Comma) {
+             self.advance();
+             if matches!(self.peek_kind(), TokenKind::Int(_) | TokenKind::Ident(_)) {
+-                ex_style = self.parse_u32_with_label("control exstyle")?;
++                ex_style = self.parse_style_expr_with_label("control exstyle")?;
+             }
+         }
+         Ok((style, ex_style))
+     }
+ 
+-    /// Read a `u32` integer literal (range-permissive — `parse_u16` is
+-    /// too narrow for `STYLE 0x80000000`). Used for style/exstyle.
+-    fn parse_u32_with_label(&mut self, label: &str) -> PResult<u32> {
++    /// Read a `u32` style expression: integer/known-symbol terms separated
++    /// by `|`. `.rc` STYLE fields are bitmasks, and Borland brc has the
++    /// common WS_/DS_/BS_/SS_ symbols built in even when no Windows header is
++    /// included.
++    fn parse_style_expr_with_label(&mut self, label: &str) -> PResult<u32> {
++        let mut value = self.parse_style_term_with_label(label)?;
++        while matches!(self.peek_kind(), TokenKind::Pipe) {
++            self.advance();
++            value |= self.parse_style_term_with_label(label)?;
++        }
++        Ok(value)
++    }
++
++    fn parse_style_term_with_label(&mut self, label: &str) -> PResult<u32> {
+         let tok = self.peek().clone();
+         match tok.kind {
+             TokenKind::Int(v) => {
+                 self.advance();
+                 Ok(v)
+             }
++            TokenKind::Ident(name) => {
++                self.advance();
++                style_symbol_value(&name).ok_or_else(|| RcError {
++                    message: format!("unknown style symbol `{name}` in {label}"),
++                    line: tok.line,
++                    col: tok.col,
++                })
++            }
+             other => self.err_at(
+-                format!("expected integer for {label}, found {}", describe_kind(&other)),
++                format!(
++                    "expected integer or style symbol for {label}, found {}",
++                    describe_kind(&other)
++                ),
+                 tok.line,
+                 tok.col,
+             ),
+@@ -1082,6 +1137,35 @@ impl<'t> Parser<'t> {
+         }
+     }
+ 
++    /// Parse a top-level resource id/name. Numeric ids remain ordinals;
++    /// bare identifiers and quoted strings become named resources.
++    fn parse_resid_with_label(&mut self, what: &str) -> PResult<ResId> {
++        let tok = self.peek().clone();
++        match tok.kind {
++            TokenKind::Int(v) => {
++                self.advance();
++                let ord = u16::try_from(v).map_err(|_| RcError {
++                    message: format!("{what}: ordinal {v} out of range for u16"),
++                    line: tok.line,
++                    col: tok.col,
++                })?;
++                Ok(ResId::Ord(ord))
++            }
++            TokenKind::Ident(s) | TokenKind::Str(s) => {
++                self.advance();
++                Ok(ResId::Name(s))
++            }
++            other => self.err_at(
++                format!(
++                    "expected integer or name for {what}, found {}",
++                    describe_kind(&other)
++                ),
++                tok.line,
++                tok.col,
++            ),
++        }
++    }
++
+     /// Shared helper for MENU/ACCELERATORS: parse any prefix of memory
+     /// flags and/or a LANGUAGE statement until BEGIN. STRINGTABLE has its
+     /// own bespoke loop because its surrounding logic differs; here we
+@@ -1207,6 +1291,7 @@ fn keyword_name(kw: Keyword) -> &'static str {
+         Keyword::CText => "CTEXT",
+         Keyword::EditText => "EDITTEXT",
+         Keyword::GroupBox => "GROUPBOX",
++        Keyword::Icon => "ICON",
+         Keyword::Grayed => "GRAYED",
+         Keyword::Inactive => "INACTIVE",
+         Keyword::Checked => "CHECKED",
+@@ -1216,6 +1301,25 @@ fn keyword_name(kw: Keyword) -> &'static str {
+     }
+ }
+ 
++fn style_symbol_value(name: &str) -> Option<u32> {
++    Some(match name.to_ascii_uppercase().as_str() {
++        "WS_POPUP" => 0x8000_0000,
++        "WS_CHILD" => 0x4000_0000,
++        "WS_VISIBLE" => 0x1000_0000,
++        "WS_CAPTION" => 0x00C0_0000,
++        "WS_SYSMENU" => 0x0008_0000,
++        "WS_GROUP" => 0x0002_0000,
++        "WS_TABSTOP" => 0x0001_0000,
++        "DS_MODALFRAME" => 0x0000_0080,
++        "BS_AUTOCHECKBOX" => 0x0000_0003,
++        "BS_AUTORADIOBUTTON" => 0x0000_0009,
++        "BS_GROUPBOX" => 0x0000_0007,
++        "SS_BLACKRECT" => 0x0000_0004,
++        "SS_ICON" => 0x0000_0003,
++        _ => return None,
++    })
++}
++
+ /// brc32 normalises these well-known class strings (case-insensitively)
+ /// into their ordinal form. Returns the ordinal when the input matches;
+ /// otherwise `None` means the string is a user-defined class and the
+diff --git a/src/rc/res.rs b/src/rc/res.rs
+index 2f483b5..a8a1b14 100644
+--- a/src/rc/res.rs
++++ b/src/rc/res.rs
+@@ -42,7 +42,7 @@
+ 
+ use super::{
+     AcceleratorTable, ControlClass, DialogControl, DialogResource, Language, MenuItem,
+-    MenuResource, RcUnit, ResRef, Resource, StringTableEntry,
++    MenuResource, RcUnit, ResId, ResRef, Resource, StringTableEntry,
+ };
+ 
+ /// RT_MENU resource type ordinal (Win32 `<winuser.h>` `RT_MENU` = 4).
+@@ -117,7 +117,7 @@ pub fn write_res(unit: &RcUnit) -> Vec<u8> {
+         let data = write_menu_bytes(m);
+         let mem_flags = menu_mem_flags(&m.flags);
+         let lang = resolve_language(m.language.as_ref(), unit.language.as_ref());
+-        write_resource_header(&mut out, data.len() as u32, RT_MENU, m.id, mem_flags, lang);
++        write_resource_header(&mut out, data.len() as u32, RT_MENU, &m.id, mem_flags, lang);
+         out.extend_from_slice(&data);
+         pad_to_dword(&mut out);
+     }
+@@ -128,7 +128,7 @@ pub fn write_res(unit: &RcUnit) -> Vec<u8> {
+         let data = write_dialog_bytes(d);
+         let mem_flags = dialog_mem_flags(&d.flags);
+         let lang = resolve_language(d.language.as_ref(), unit.language.as_ref());
+-        write_resource_header(&mut out, data.len() as u32, RT_DIALOG, d.id, mem_flags, lang);
++        write_resource_header(&mut out, data.len() as u32, RT_DIALOG, &d.id, mem_flags, lang);
+         out.extend_from_slice(&data);
+         pad_to_dword(&mut out);
+     }
+@@ -143,7 +143,7 @@ pub fn write_res(unit: &RcUnit) -> Vec<u8> {
+             &mut out,
+             data.len() as u32,
+             RT_ACCELERATOR,
+-            a.id,
++            &a.id,
+             mem_flags,
+             lang,
+         );
+@@ -164,7 +164,7 @@ pub fn write_res(unit: &RcUnit) -> Vec<u8> {
+             &mut out,
+             data.len() as u32,
+             RT_STRING,
+-            bundle_id,
++            &ResId::Ord(bundle_id),
+             *flags,
+             *lang,
+         );
+@@ -199,21 +199,37 @@ fn write_resource_header(
+     out: &mut Vec<u8>,
+     data_size: u32,
+     type_ord: u16,
+-    name_ord: u16,
++    name: &ResId,
+     mem_flags: u16,
+     language_id: u16,
+ ) {
+-    write_u32_le(out, data_size);
+-    write_u32_le(out, 32); // header_size — both type and name are u16 ords
+-    write_u16_le(out, ORDINAL_MARKER);
+-    write_u16_le(out, type_ord);
+-    write_u16_le(out, ORDINAL_MARKER);
+-    write_u16_le(out, name_ord);
+-    write_u32_le(out, 0); // data_version
+-    write_u16_le(out, mem_flags);
+-    write_u16_le(out, language_id);
+-    write_u32_le(out, 0); // version
+-    write_u32_le(out, 0); // characteristics
++    let mut hdr = Vec::new();
++    write_u32_le(&mut hdr, data_size);
++    write_u32_le(&mut hdr, 0); // patched after variable-length type/name fields
++    write_u16_le(&mut hdr, ORDINAL_MARKER);
++    write_u16_le(&mut hdr, type_ord);
++    write_resid_name(&mut hdr, name);
++    pad_to_dword(&mut hdr);
++    write_u32_le(&mut hdr, 0); // data_version
++    write_u16_le(&mut hdr, mem_flags);
++    write_u16_le(&mut hdr, language_id);
++    write_u32_le(&mut hdr, 0); // version
++    write_u32_le(&mut hdr, 0); // characteristics
++    let header_size = hdr.len() as u32;
++    hdr[4..8].copy_from_slice(&header_size.to_le_bytes());
++    out.extend_from_slice(&hdr);
++}
++
++fn write_resid_name(out: &mut Vec<u8>, id: &ResId) {
++    match id {
++        ResId::Ord(ord) => {
++            write_u16_le(out, ORDINAL_MARKER);
++            write_u16_le(out, *ord);
++        }
++        ResId::Name(name) => {
++            write_utf16le_nul(out, name);
++        }
++    }
+ }
+ 
+ /// One bundle's contribution to the PE `.rsrc` section (G3): the bundle id
+@@ -499,7 +515,10 @@ pub(crate) fn collect_dialogs(unit: &RcUnit) -> Vec<RsrcDialog> {
+         .iter()
+         .filter_map(|r| match r {
+             Resource::Dialog(d) => Some(RsrcDialog {
+-                id: d.id,
++                id: d
++                    .id
++                    .as_ord()
++                    .expect("named DIALOG resources require rc gap 10 PE .rsrc support"),
+                 language: resolve_language(d.language.as_ref(), unit.language.as_ref()),
+                 data: write_dialog_bytes(d),
+             }),
+@@ -563,7 +582,10 @@ pub(crate) fn collect_menus(unit: &RcUnit) -> Vec<RsrcMenu> {
+         .iter()
+         .filter_map(|r| match r {
+             Resource::Menu(m) => Some(RsrcMenu {
+-                id: m.id,
++                id: m
++                    .id
++                    .as_ord()
++                    .expect("named MENU resources require rc gap 10 PE .rsrc support"),
+                 language: resolve_language(m.language.as_ref(), unit.language.as_ref()),
+                 data: write_menu_bytes(m),
+             }),
+@@ -581,7 +603,10 @@ pub(crate) fn collect_accelerators(unit: &RcUnit) -> Vec<RsrcAccel> {
+         .iter()
+         .filter_map(|r| match r {
+             Resource::Accelerators(a) => Some(RsrcAccel {
+-                id: a.id,
++                id: a
++                    .id
++                    .as_ord()
++                    .expect("named ACCELERATORS resources require rc gap 10 PE .rsrc support"),
+                 language: resolve_language(a.language.as_ref(), unit.language.as_ref()),
+                 data: write_accel_bytes(a),
+             }),

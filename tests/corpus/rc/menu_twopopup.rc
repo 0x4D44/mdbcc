@@ -1,0 +1,12 @@
+100 MENU
+BEGIN
+  POPUP "File"
+  BEGIN
+    MENUITEM "Open", 200
+    MENUITEM "Exit", 201
+  END
+  POPUP "Help"
+  BEGIN
+    MENUITEM "About", 300
+  END
+END

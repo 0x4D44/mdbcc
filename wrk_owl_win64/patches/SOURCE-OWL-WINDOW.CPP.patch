@@ -1,0 +1,95 @@
+--- SOURCE/OWL/WINDOW.CPP
++++ WINDOW.CPP
+@@ -15,6 +15,13 @@
+ #include <owl/framewin.h>
+ #include <stdlib.h>
+ 
++/* --- MDBCC Win64 OWL window-bootstrap shim (MDBCC-01) --- */
++#include "mdwin64thunk.h"
++#ifndef MDBCC_WIN64_THUNK_H
++#error "mdwin64thunk.h overlay missing — Win64 ABI prologue not applied"
++#endif
++extern "C" int mdbcc_owl_win64_marker_window = 1;  /* O2 patched-objects-used gate */
++
+ DIAG_DECLARE_GROUP(OwlMsg);  // diagnostic group for message tracing
+ DIAG_DEFINE_GROUP_INIT(OWL_INI, OwlWin, 1, 0);  // diagnostic group for windows
+ 
+@@ -245,7 +252,12 @@
+ #else
+   if (::GetWindowTask(HWindow) == ::GetCurrentTask()) {
+ #endif
+-    DefaultProc = (WNDPROC)SetWindowLong(GWL_WNDPROC, uint32(GetThunk()));
++    // Win64 (MDBCC-01): for predefined-class controls InitWndProc never runs, so this is the
++    // only site that binds `this`. Store it in GWLP_USERDATA, then atomically install the static
++    // dispatcher full-width via SetWindowLongPtrA(GWLP_WNDPROC) (its return is the prior proc),
++    // replacing the truncating member SetWindowLong(GWL_WNDPROC, uint32(GetThunk())).
++    ::SetWindowLongPtrA(HWindow, GWLP_USERDATA, (LONG_PTR)this);
++    DefaultProc = (WNDPROC)(LONG_PTR)::SetWindowLongPtrA(HWindow, GWLP_WNDPROC, (LONG_PTR)GetThunk());
+     CHECK(DefaultProc != GetThunk());  // can only be called once!
+   }
+ }
+@@ -289,9 +301,13 @@
+       // May want to check WNDPROC against Thunk to see if its still us
+       // and not restore if it's not us...
+       //
+-      WARNX(OwlWin, GetWindowLong(GWL_WNDPROC) != (uint32)GetThunk(), 0,
++      // Win64 (MDBCC-01): compare/restore the WndProc full-width via *Ptr*, and clear our
++      // `this` from GWLP_USERDATA so GetWindowPtr can't return a freed object for this HWND.
++      WARNX(OwlWin, (WNDPROC)(LONG_PTR)::GetWindowLongPtrA(HWindow, GWLP_WNDPROC) != GetThunk(), 0,
+             "Restoring old WndProc after foreign subclass of:" << *this);
+-      SetWindowLong(GWL_WNDPROC, uint32(DefaultProc));
++      ::SetWindowLongPtrA(HWindow, GWLP_WNDPROC, (LONG_PTR)DefaultProc);
++      if ((TWindow*)(LONG_PTR)::GetWindowLongPtrA(HWindow, GWLP_USERDATA) == this)
++        ::SetWindowLongPtrA(HWindow, GWLP_USERDATA, 0);
+     }
+     // for non-aliases:
+     //  - destroy the windows element
+@@ -804,7 +820,10 @@
+ #if defined(BI_PLAT_WIN16)
+     return EvCommand(LOWORD(wParam), (HWND)(uint)lParam, HIWORD(lParam));
+ #else
+-    return EvCommand(LOWORD(wParam), (HWND)(uint)lParam, HIWORD(wParam));
++    // MDBCC Win64 (wall 2): lParam carries the notifying control's HWND. The original
++    // (uint)lParam truncated it to 32 bits -> EvCommand mis-routes control notifications
++    // (a dialog OK-button click never reaches the parent). Pass the full pointer-width handle.
++    return EvCommand(LOWORD(wParam), (HWND)lParam, HIWORD(wParam));
+ #endif
+   }
+ 
+@@ -895,9 +914,15 @@
+ #else
+ LRESULT
+ FAR PASCAL _stdcall
+-StdWndProc(HWND, uint msg, WPARAM wParam, LPARAM lParam)
++StdWndProc(HWND hWnd, uint msg, WPARAM wParam, LPARAM lParam)
+ {
+-  return ((TWindow*)_EAX)->ReceiveMessage(msg, wParam, lParam);
++  // Win64 (MDBCC-01): recover `this` full-width from GWLP_USERDATA (where InitWndProc /
++  // SubclassWindowFunction stored it) instead of the 32-bit Borland _EAX pseudo-register.
++  // Pre-WM_NCCREATE messages (e.g. WM_GETMINMAXINFO) find a 0 slot -> DefWindowProc.
++  TWindow* self = (TWindow*)(LONG_PTR)GetWindowLongPtrA(hWnd, GWLP_USERDATA);
++  if (!self)
++    return ::DefWindowProc(hWnd, msg, wParam, lParam);
++  return self->ReceiveMessage(msg, wParam, lParam);
+ }
+ #endif
+ 
+@@ -988,10 +1013,15 @@
+     return 0;
+ #endif
+ 
+-  WNDPROC wndProc = (WNDPROC)::GetWindowLong(hWnd, GWL_WNDPROC);
+-  if (!wndProc)
++  // Win64 (MDBCC-01): proc-validated recovery. Only trust GWLP_USERDATA when our static
++  // dispatcher (StdWndProc) is the live WndProc — this restores the oracle's "is this one of
++  // OUR OWL windows?" gate (it previously round-tripped via CallWindowProc(GetWindowPtrMsgId),
++  // which relied on the 32-bit GWL_WNDPROC read + LRESULT(this) truncation). Returns 0 after
++  // teardown (proc restored to DefaultProc) and for foreign windows with incidental userdata.
++  (void)param2;  // cross-app-instance filter dropped for single-app RailC (HLD D12)
++  if ((WNDPROC)(LONG_PTR)::GetWindowLongPtrA(hWnd, GWLP_WNDPROC) != (WNDPROC)StdWndProc)
+     return 0;
+-  return (TWindow*)::CallWindowProc(wndProc, hWnd, GetWindowPtrMsgId, 0, param2);
++  return (TWindow*)(LONG_PTR)::GetWindowLongPtrA(hWnd, GWLP_USERDATA);
+ }
+ 
+ //
