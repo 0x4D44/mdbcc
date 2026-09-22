@@ -11,6 +11,10 @@ injects only the newest 30 nuggets (or 4 KiB), so entries past that stay here fo
 and cost a session nothing. Durable project facts belong in CLAUDE.md (repo) or
 ~/.claude/CLAUDE.md (global), not here. -->
 
+- 2026-09-22: PE subsystem version >= 6.0 changes USER frame and dialog metrics; keep 3.10 (pe_writer.rs SUBSYSTEM_VERSION)
+  At 6.0 RailC's fixed-pixel boards lost 10px of client and the About dialog
+  shrank 87px. When a GUI looks "laid out wrong" versus the Borland build,
+  compare header fields before hunting codegen: patch a copy and re-measure.
 - 2026-09-22: Static-ness is per overload, not per name; derived ClassInfo inherits method NAMES only (parser.rs ClassInfo::is_static_overload)
   OWL mixes static and instance overloads (TGdiBase::CheckValid). Keying static by
   name dropped `this` from the instance overload; build_bc45_libs then skipped the
